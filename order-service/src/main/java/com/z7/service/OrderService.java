@@ -35,7 +35,7 @@ public class OrderService {
         RestTemplate template = new RestTemplate();
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        HttpEntity<InventoryResponse[]> res =  template.postForEntity("/api/inventory", inventoryRequest, InventoryResponse[].class);
+        HttpEntity<InventoryResponse[]> res =  template.postForEntity("lb://inventory-service/api/inventory", inventoryRequest, InventoryResponse[].class);
         InventoryResponse[] responseBody = res.getBody();
 
         boolean allProductsInStock = Arrays.stream(responseBody).allMatch(InventoryResponse::isInStock);
