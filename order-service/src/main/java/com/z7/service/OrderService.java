@@ -1,5 +1,7 @@
 package com.z7.service;
 
+import brave.Span;
+import brave.Tracer;
 import com.z7.dto.InventoryRequest;
 import com.z7.dto.InventoryResponse;
 import com.z7.dto.OrderLineItemsDto;
@@ -22,6 +24,12 @@ public class OrderService {
 
     @Autowired
     private OrderRepository orderRepository;
+    @Autowired
+    private Tracer tracer;
+
+    @Autowired
+    private RestTemplate restTemplate;
+
     public Order placeOrder(OrderRequest orderRequest) {
         List<OrderLineItem> orderLineItems = orderRequest.getOrderLineItems().stream().map(this::mapOrderLineItemsToDto).toList();
         Order order = Order.builder().orderLineItemsList(orderLineItems).orderNumber(UUID.randomUUID().toString()).build();
@@ -30,19 +38,30 @@ public class OrderService {
         // we need to reach to the inventory service and check if the products are in stock
         // and the quantity covers the current request
 
-        InventoryRequest inventoryRequest = InventoryRequest.builder().productIdsList(order.getOrderLineItemsList().stream().map(orderLineItem -> orderLineItem.getSkuCode()).toList()).build();
+        Span inventoryServiceLookup = tracer.nextSpan().name("InventoryServiceLookup").start();
 
-        RestTemplate template = new RestTemplate();
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        HttpEntity<InventoryResponse[]> res =  template.postForEntity("lb://inventory-service/api/inventory", inventoryRequest, InventoryResponse[].class);
-        InventoryResponse[] responseBody = res.getBody();
+        try (Tracer.SpanInScope ws = tracer.withSpanInScope(inventoryServiceLookup)
+        ) {
+            InventoryRequest inventoryRequest = InventoryRequest.builder().productIdsList(order.getOrderLineItemsList().stream().map(orderLineItem -> orderLineItem.getSkuCode()).toList()).build();
 
-        boolean allProductsInStock = Arrays.stream(responseBody).allMatch(InventoryResponse::isInStock);
-        if(allProductsInStock){
-            orderRepository.save(order);
-            return order;
-        }else throw new IllegalArgumentException("Product is not in stock, please try again later");
+            RestTemplate template = new RestTemplate();
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            HttpEntity<InventoryRequest> httpEntity = new HttpEntity(inventoryRequest, headers);
+            HttpEntity<InventoryResponse[]> res = template.postForEntity("lb://inventory-service/api/inventory", httpEntity, InventoryResponse[].class);
+            InventoryResponse[] responseBody = res.getBody();
+
+            boolean allProductsInStock = Arrays.stream(responseBody).allMatch(InventoryResponse::isInStock);
+            if (allProductsInStock) {
+                orderRepository.save(order);
+                return order;
+            } else
+                throw new IllegalArgumentException("Product is not in stock, please try again later");
+        } finally {
+            inventoryServiceLookup.finish();
+        }
+
+
     }
 
     private OrderLineItem mapOrderLineItemsToDto(OrderLineItemsDto orderLineItemsDto) {
