@@ -6,6 +6,7 @@ import com.z7.dto.InventoryRequest;
 import com.z7.dto.InventoryResponse;
 import com.z7.dto.OrderLineItemsDto;
 import com.z7.dto.OrderRequest;
+import com.z7.event.OrderPlacedEvent;
 import com.z7.model.Order;
 import com.z7.model.OrderLineItem;
 import com.z7.repository.OrderRepository;
@@ -14,6 +15,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.Arrays;
@@ -29,6 +31,9 @@ public class OrderService {
 
     @Autowired
     private RestTemplate restTemplate;
+
+    @Autowired
+    private KafkaTemplate<String, OrderPlacedEvent> kafkaTemplate;
 
     public Order placeOrder(OrderRequest orderRequest) {
         List<OrderLineItem> orderLineItems = orderRequest.getOrderLineItems().stream().map(this::mapOrderLineItemsToDto).toList();
@@ -54,6 +59,7 @@ public class OrderService {
             boolean allProductsInStock = Arrays.stream(responseBody).allMatch(InventoryResponse::isInStock);
             if (allProductsInStock) {
                 orderRepository.save(order);
+                kafkaTemplate.send("ORDER_PLACED", new OrderPlacedEvent(order.getOrderNumber()));
                 return order;
             } else
                 throw new IllegalArgumentException("Product is not in stock, please try again later");
